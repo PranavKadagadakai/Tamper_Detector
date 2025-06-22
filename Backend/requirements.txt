@@ -1,0 +1,11 @@
+Django==5.2.1
+django-cors-headers
+djangorestframework 
+djangorestframework-simplejwt
+exifread
+numpy
+opencv-python
+pytesseract
+python-dotenv
+Pillow
+scikit-image
