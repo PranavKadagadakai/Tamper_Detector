@@ -136,7 +136,8 @@ class UploadImageView(APIView):
                     detection_details=results
                 )
 
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
             return Response({
                 "status": "Original" if results['is_authentic'] else "Tampered",
