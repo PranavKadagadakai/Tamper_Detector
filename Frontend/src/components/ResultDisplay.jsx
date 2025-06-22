@@ -12,7 +12,7 @@ export default function ResultDisplay() {
     return null;
   }
 
-  const { status, confidence, fileName } = state;
+  const { status, confidence, fileName, details } = state;
 
   return (
     <div className="card">
@@ -60,6 +60,14 @@ export default function ResultDisplay() {
               : "The document shows signs of potential tampering. Please verify with additional checks."}
           </p>
         </div>
+        {details && (
+          <div className="mt-4">
+            <h6>Detection Breakdown</h6>
+            <pre className="bg-light p-3 rounded small">
+              {JSON.stringify(details, null, 2)}
+            </pre>
+          </div>
+        )}
 
         <div className="d-flex gap-2">
           <button className="btn btn-primary" onClick={() => navigate("/")}>

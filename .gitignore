@@ -20,3 +20,5 @@ tmp
 *.pyc
 #Database files
 db.sqlite3
+
+pranavkadagadakai-tamper_detector.txt

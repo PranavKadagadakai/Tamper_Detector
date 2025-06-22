@@ -10,6 +10,7 @@ export default function UploadForm() {
   const [error, setError] = useState(null);
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthContext();
+  const [pdfPassword, setPdfPassword] = useState("");
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files?.[0];
@@ -18,7 +19,7 @@ export default function UploadForm() {
     // Validate file type
     const validTypes = ["image/jpeg", "image/png", "application/pdf"];
     if (!validTypes.includes(selectedFile.type)) {
-      setError("Please upload a JPEG, PNG, or PDF file");
+      setError("Please upload a JPEG, PNG or a PDF file");
       return;
     }
 
@@ -53,7 +54,10 @@ export default function UploadForm() {
 
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("image", file); // ✅ must match backend's serializer
+      if (pdfPassword.trim()) {
+        formData.append("password", pdfPassword.trim());
+      }
 
       const response = await api.post("/api/auth/upload/", formData, {
         headers: {
@@ -66,14 +70,26 @@ export default function UploadForm() {
           status: response.data.status.toLowerCase(),
           confidence: response.data.confidence,
           fileName: file.name,
+          details: response.data.details, // ✅ forward extra details
         },
       });
     } catch (error) {
-      console.error("Error detecting tampering:", error);
-      setError(
-        error.response?.data?.error ||
-          "An error occurred while processing your file"
-      );
+      console.error("Upload failed:", error);
+
+      if (error.response) {
+        const { status, data } = error.response;
+        if (status === 400) {
+          setError(data.error || "Bad request. Please check your input.");
+        } else if (status === 500) {
+          setError("Server encountered an error. Try again later.");
+        } else {
+          setError("Unexpected error occurred.");
+        }
+      } else if (error.request) {
+        setError("No response received from the server.");
+      } else {
+        setError(`Error setting up request: ${error.message}`);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -129,6 +145,26 @@ export default function UploadForm() {
             </>
           )}
         </div>
+        {file && file.type === "application/pdf" && (
+          <div className="alert alert-info mt-2">
+            PDF detected. Only the first page will be analyzed.
+          </div>
+        )}
+        {file?.type === "application/pdf" && (
+          <div className="mt-2">
+            <label htmlFor="pdfPassword" className="form-label">
+              PDF Password (if protected)
+            </label>
+            <input
+              type="password"
+              className="form-control"
+              id="pdfPassword"
+              value={pdfPassword}
+              onChange={(e) => setPdfPassword(e.target.value)}
+              placeholder="Enter password (optional)"
+            />
+          </div>
+        )}
         <div className="mt-3 d-flex justify-content-end">
           <button
             className="btn btn-primary"
