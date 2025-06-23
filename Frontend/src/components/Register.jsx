@@ -16,10 +16,16 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.post("api/auth/register/", formData);
+      console.log("Registering user:", formData);
+      await api.post("api/auth/register/", formData, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
       alert("Registered successfully. Please log in.");
       navigate("/login");
     } catch (err) {
+      console.error("Registration error:", err);
       alert("Registration failed.");
     }
   };

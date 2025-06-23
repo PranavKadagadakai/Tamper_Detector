@@ -16,8 +16,8 @@ const Login = () => {
     e.preventDefault();
     try {
       const res = await api.post("api/auth/login/", formData);
-      localStorage.setItem(ACCESS_TOKEN, res.data.access);
-      localStorage.setItem(REFRESH_TOKEN, res.data.refresh);
+      // localStorage.setItem(ACCESS_TOKEN, res.data.access);
+      // localStorage.setItem(REFRESH_TOKEN, res.data.refresh);
       setIsAuthenticated(true);
       navigate("/history");
     } catch (err) {
