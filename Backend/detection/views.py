@@ -1,84 +1,85 @@
-from pathlib import Path
 import os
 import tempfile
 import mimetypes
+from pathlib import Path
 from datetime import datetime
-from io import BytesIO
+import json
+
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.views import View
 
 import numpy as np
 import cv2
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image
 from PyPDF2 import PdfReader, PdfWriter
 from pdf2image import convert_from_bytes
 import pytesseract
 import exifread
 import joblib
 
-from django.contrib.auth.models import User
-from django.contrib.auth import authenticate
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
-from rest_framework_simplejwt.tokens import RefreshToken
+from detection.models import UploadHistory
 
-from .models import UploadHistory
-from .serializers import UploadSerializer, HistorySerializer, RegisterSerializer
-
-# Optional if using SSIM for future improvements
-# from skimage.metrics import structural_similarity as ssim
-
-
-# === Constants ===
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_PATH = os.path.join(BASE_DIR, "detection", "model", "id_classifier.pkl")
+# @method_decorator(csrf_exempt, name='dispatch')
+# class RegisterView(View):
+#     def post(self, request):
+#         try:
+#             data = json.loads(request.body)
+#         except json.JSONDecodeError:
+#             return JsonResponse({"error": "Invalid JSON format."}, status=400)
+#         username = data.get("username")
+#         email = data.get("email")
+#         password = data.get("password")
 
-class RegisterView(APIView):
+#         if not username or not password or not email:
+#             return JsonResponse({"error": "All fields required."}, status=400)
+
+#         if User.objects.filter(username=username).exists():
+#             return JsonResponse({"error": "Username already exists."}, status=400)
+
+#         User.objects.create_user(username=username, email=email, password=password)
+#         return JsonResponse({"message": "User registered successfully."}, status=201)
+
+# @method_decorator(csrf_exempt, name='dispatch')
+# class LoginView(View):
+#     def post(self, request):
+#         from rest_framework_simplejwt.tokens import RefreshToken
+#         data = json.loads(request.body)
+#         username = data.get("username")
+#         password = data.get("password")
+
+#         if not username or not password:
+#             return JsonResponse({"error": "Username and password required."}, status=400)
+
+#         user = authenticate(username=username, password=password)
+#         if user:
+#             refresh = RefreshToken.for_user(user)
+#             return JsonResponse({
+#                 "access": str(refresh.access_token),
+#                 "refresh": str(refresh),
+#                 "user_id": user.id,
+#                 "username": user.username
+#             })
+#         return JsonResponse({"error": "Invalid credentials."}, status=401)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class UploadView(View):
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        if serializer.is_valid():
-            if User.objects.filter(username=serializer.validated_data['username']).exists():
-                return Response({"error": "Username already exists"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            user = User.objects.create_user(
-                username=serializer.validated_data['username'],
-                email=serializer.validated_data['email'],
-                password=serializer.validated_data['password']
-            )
-            return Response({"message": "User registered successfully"}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        if 'image' not in request.FILES:
+            return JsonResponse({"error": "File is missing."}, status=400)
 
-class LoginView(APIView):
-    def post(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
-        
-        if not username or not password:
-            return Response({"error": "Username and password required"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        user = authenticate(username=username, password=password)
-        if user:
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user_id": user.id,
-                "username": user.username
-            })
-        return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
-
-class UploadImageView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        uploaded_file = request.FILES.get('image')
-
-        serializer = UploadSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        uploaded_file = request.FILES['image']
+        password = request.POST.get("password", "").strip()
 
         allowed_types = ['image/jpeg', 'image/png', 'application/pdf']
-        if uploaded_file is None or uploaded_file.content_type not in allowed_types:
-            return Response({"error": "Unsupported or missing file type"}, status=400)
+        if uploaded_file.content_type not in allowed_types:
+            return JsonResponse({"error": "Unsupported file type."}, status=400)
 
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[-1]) as tmp_file:
@@ -86,48 +87,34 @@ class UploadImageView(APIView):
                     tmp_file.write(chunk)
                 tmp_path = tmp_file.name
 
-            # If PDF, convert to image
             if uploaded_file.content_type == 'application/pdf':
-                password = request.data.get("password", "").strip()
-
-                # Check if password protected
                 with open(tmp_path, 'rb') as f:
                     reader = PdfReader(f)
                     if reader.is_encrypted:
                         if not password:
-                            return Response({"error": "PDF is password-protected. Please provide the password."}, status=400)
-
-                        try:
-                            reader.decrypt(password)
-                        except Exception:
-                            return Response({"error": "Incorrect PDF password."}, status=400)
-
-                        # Decrypt and write to temp file
+                            return JsonResponse({"error": "PDF is password protected."}, status=400)
+                        reader.decrypt(password)
                         writer = PdfWriter()
                         for page in reader.pages:
                             writer.add_page(page)
-
                         decrypted_path = tmp_path + "_decrypted.pdf"
-                        with open(decrypted_path, 'wb') as out:
-                            writer.write(out)
+                        with open(decrypted_path, 'wb') as f:
+                            writer.write(f)
                         os.unlink(tmp_path)
                         tmp_path = decrypted_path
 
-                # Convert to image
                 images = convert_from_bytes(open(tmp_path, 'rb').read())
                 if not images:
-                    return Response({"error": "Unable to convert PDF to image"}, status=400)
+                    return JsonResponse({"error": "Could not convert PDF to image."}, status=400)
 
-                img_path = tmp_path + "_page.jpg"
+                img_path = tmp_path + ".jpg"
                 images[0].save(img_path, 'JPEG')
                 os.unlink(tmp_path)
                 tmp_path = img_path
 
-
             results = self.detect_tampering(tmp_path)
 
-            # Save to history if user is authenticated
-            if request.user and request.user.is_authenticated:
+            if request.user.is_authenticated:
                 UploadHistory.objects.create(
                     user=request.user,
                     image=uploaded_file,
@@ -139,19 +126,19 @@ class UploadImageView(APIView):
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-            return Response({
+            return JsonResponse({
                 "status": "Original" if results['is_authentic'] else "Tampered",
                 "confidence": results['confidence'],
-                "file_name": uploaded_file.name,
+                "details": results,
                 "timestamp": datetime.now().isoformat(),
-                "details": results
-            }, status=status.HTTP_200_OK)
+                "file_name": uploaded_file.name
+            })
 
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse({"error": str(e)}, status=500)
         
         finally:
-            if os.path.exists(tmp_path):
+            if 'tmp_path' in locals() and tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     # === ALL detection functions below ===
@@ -350,10 +337,29 @@ class UploadImageView(APIView):
         prob = model.predict_proba([features])[0].max()
         return label, prob
 
-class HistoryView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
+@method_decorator(csrf_exempt, name='dispatch')
+class HistoryView(View):
     def get(self, request):
-        uploads = UploadHistory.objects.filter(user=request.user).order_by('-timestamp')
-        serializer = HistorySerializer(uploads, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # In production, integrate JWT middleware to ensure authentication
+        user_id = request.GET.get("user_id")
+        if not user_id:
+            return JsonResponse({"error": "user_id is required."}, status=400)
+
+        try:
+            user = User.objects.get(id=user_id)
+            history = UploadHistory.objects.filter(user=user).order_by('-timestamp')
+            data = [
+                {
+                    "id": item.id,
+                    "image_url": item.image.url if item.image else None,
+                    "result": item.result,
+                    "confidence": item.confidence,
+                    "timestamp": item.timestamp.isoformat(),
+                    "detection_details": item.detection_details
+                } for item in history
+            ]
+            return JsonResponse(data, safe=False)
+        except User.DoesNotExist:
+            return JsonResponse({"error": "User not found."}, status=404)
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
